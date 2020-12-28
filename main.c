@@ -129,7 +129,7 @@ float measured[2][POINTS_COUNT][2];
 uint32_t frequencies[POINTS_COUNT];
 
 #undef VERSION
-#define VERSION "1.0.41"
+#define VERSION "1.0.45"
 
 // Version text, displayed in Config->Version menu, also send by info command
 const char *info_about[]={
@@ -559,6 +559,8 @@ void set_power(uint8_t value){
   if (value > SI5351_CLK_DRIVE_STRENGTH_8MA) value = SI5351_CLK_DRIVE_STRENGTH_AUTO;
   if (current_props._power == value) return;
   current_props._power = value;
+  // Update power if pause
+  if (!(sweep_mode&SWEEP_ENABLE)) si5351_set_power(value);
   redraw_request|=REDRAW_CAL_STATUS;
 }
 
@@ -774,13 +776,11 @@ usage:
 #endif
 
 config_t config = {
-  .magic =             CONFIG_MAGIC,
-  .dac_value =         1922,
+  .magic       = CONFIG_MAGIC,
+  .dac_value   = 1922,
   .lcd_palette = LCD_DEFAULT_PALETTE,
-//  .touch_cal =         { 693, 605, 124, 171 },  // 2.4 inch LCD panel
-  .touch_cal =         { 358, 544, 162, 198 },  // 2.8 inch LCD panel
-//  .touch_cal =         { 272, 521, 114, 153 },  //4.0" LCD
-  ._mode     = VNA_MODE_START_STOP,
+  .touch_cal   = DEFAULT_TOUCH_CONFIG,
+  ._mode       = VNA_MODE_START_STOP,
   .harmonic_freq_threshold = FREQUENCY_THRESHOLD,
   ._serial_speed = SERIAL_DEFAULT_BITRATE,
   .vbat_offset = 320,
@@ -789,7 +789,6 @@ config_t config = {
 };
 
 properties_t current_props;
-properties_t *active_props = &current_props;
 
 // NanoVNA Default settings
 static const trace_t def_trace[TRACES_MAX] = {//enable, type, channel, reserved, scale, refpos
@@ -831,18 +830,6 @@ int load_properties(uint32_t id){
   int r = caldata_recall(id);
   update_frequencies(false);
   return r;
-}
-
-void
-ensure_edit_config(void)
-{
-  if (active_props == &current_props)
-    return;
-
-  //memcpy(&current_props, active_props, sizeof(config_t));
-  active_props = &current_props;
-  // move to uncal state
-  cal_status = 0;
 }
 
 #ifdef ENABLED_DUMP_COMMAND
@@ -1222,7 +1209,6 @@ set_sweep_frequency(int type, uint32_t freq)
   if (freq > STOP_MAX)
     freq = STOP_MAX;
   uint32_t center, span;
-  ensure_edit_config();
   switch (type) {
     case ST_START:
       config._mode &= ~VNA_MODE_CENTER_SPAN;
@@ -1575,8 +1561,6 @@ static void apply_edelay(void)
 void
 cal_collect(uint16_t type)
 {
-  //ensure_edit_config();
-  active_props = &current_props;
   uint16_t dst, src;
 #if 1
   static const struct {
@@ -1630,7 +1614,6 @@ cal_collect(uint16_t type)
 void
 cal_done(void)
 {
-  ensure_edit_config();
   if (!(cal_status & CALSTAT_LOAD))
     eterm_set(ETERM_ED, 0.0, 0.0);
   //adjust_ed();
@@ -1672,8 +1655,13 @@ cal_interpolate(void)
   if (src == NULL)
     return;
 
-  ensure_edit_config();
-
+  // Upload not interpolated if some
+  if (frequencies[0] == src->_frequency0 && frequencies[src->_sweep_points-1] == src->_frequency1){
+    memcpy(current_props._cal_data, src->_cal_data, sizeof(src->_cal_data));
+    cal_status = src->_cal_status;
+    redraw_request |= REDRAW_CAL_STATUS;
+    return;
+  }
   uint32_t src_f = src->_frequency0;
   // lower than start freq of src range
   for (i = 0; i < sweep_points; i++) {
@@ -1744,7 +1732,7 @@ cal_interpolate(void)
     }
   }
 interpolate_finish:
-  cal_status |= src->_cal_status | CALSTAT_APPLY | CALSTAT_INTERPOLATED;
+  cal_status = src->_cal_status | CALSTAT_INTERPOLATED;
   redraw_request |= REDRAW_CAL_STATUS;
 }
 
@@ -1904,11 +1892,6 @@ void set_trace_scale(int t, float scale)
   }
 }
 
-float get_trace_scale(int t)
-{
-  return trace[t].scale;
-}
-
 void set_trace_refpos(int t, float refpos)
 {
   if (trace[t].refpos != refpos) {
@@ -1917,9 +1900,12 @@ void set_trace_refpos(int t, float refpos)
   }
 }
 
-float get_trace_refpos(int t)
+void set_electrical_delay(float picoseconds)
 {
-  return trace[t].refpos;
+  if (electrical_delay != picoseconds) {
+    electrical_delay = picoseconds;
+    request_to_redraw_grid();
+  }
 }
 
 VNA_SHELL_FUNCTION(cmd_trace)
@@ -1986,19 +1972,6 @@ usage:
                "trace {0|1|2|3} {%s} {value}\r\n", cmd_type_list, cmd_scale_ref_list);
 }
 
-void set_electrical_delay(float picoseconds)
-{
-  if (electrical_delay != picoseconds) {
-    electrical_delay = picoseconds;
-    force_set_markmap();
-  }
-}
-
-float get_electrical_delay(void)
-{
-  return electrical_delay;
-}
-
 VNA_SHELL_FUNCTION(cmd_edelay)
 {
   if (argc != 1) {
@@ -2012,6 +1985,7 @@ VNA_SHELL_FUNCTION(cmd_edelay)
 VNA_SHELL_FUNCTION(cmd_marker)
 {
   static const char cmd_marker_list[] = "on|off";
+  static const char cmd_marker_smith[] = "lin|log|ri|rx|rlc";
   int t;
   if (argc == 0) {
     for (t = 0; t < MARKERS_MAX; t++) {
@@ -2028,6 +2002,12 @@ VNA_SHELL_FUNCTION(cmd_marker)
     active_marker = enable == 1 ? MARKER_INVALID : 0;
     for (t = 0; t < MARKERS_MAX; t++)
       markers[t].enabled = enable == 0;
+    return;
+  }
+  // Set marker smith format
+  int format = get_str_index(argv[0], cmd_marker_smith);
+  if (format >=0){
+    marker_smith_format = format;
     return;
   }
   t = my_atoi(argv[0])-1;
@@ -2053,7 +2033,8 @@ VNA_SHELL_FUNCTION(cmd_marker)
       return;
   }
  usage:
-  shell_printf("marker [n] [%s|{index}]\r\n", cmd_marker_list);
+  shell_printf("marker [n] [%s|{index}]\r\n"
+               "marker [%s]\r\n", cmd_marker_list, cmd_marker_smith);
 }
 
 VNA_SHELL_FUNCTION(cmd_touchcal)
@@ -3034,10 +3015,14 @@ int main(void)
 #endif
 
 /*
+ * tlv320aic Initialize (audio codec)
+ */
+  tlv320aic3204_init();
+//  chThdSleepMilliseconds(100);
+
+/*
  * I2S Initialize
  */
-  chThdSleepMilliseconds(100);
-  tlv320aic3204_init();
   i2sInit();
   i2sObjectInit(&I2SD2);
   i2sStart(&I2SD2, &i2sconfig);

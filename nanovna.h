@@ -538,8 +538,6 @@ void set_trace_type(int t, int type);
 void set_trace_channel(int t, int channel);
 void set_trace_scale(int t, float scale);
 void set_trace_refpos(int t, float refpos);
-float get_trace_scale(int t);
-float get_trace_refpos(int t);
 const char *get_trace_typename(int t);
 
 //
@@ -548,7 +546,6 @@ void shell_update_speed(void);
 void shell_reset_console(void);
 
 void set_electrical_delay(float picoseconds);
-float get_electrical_delay(void);
 float groupdelay_from_array(int i, float array[POINTS_COUNT][2]);
 
 void plot_init(void);
@@ -559,7 +556,7 @@ void redraw_frame(void);
 void request_to_draw_cells_behind_menu(void);
 void request_to_draw_cells_behind_numeric_input(void);
 void redraw_marker(int8_t marker);
-void plot_into_index(float measured[2][POINTS_COUNT][2]);
+void plot_into_index(float array[2][POINTS_COUNT][2]);
 void force_set_markmap(void);
 void draw_frequencies(void);
 void draw_all(bool flush);
@@ -602,6 +599,11 @@ extern  uint8_t redraw_request;
 // Always one if no DMA mode
 #define DISPLAY_CELL_BUFFER_COUNT     1
 #endif
+
+// LCD touch settings
+//#define DEFAULT_TOUCH_CONFIG { 693, 605, 124, 171 }  // 2.4 inch LCD panel
+#define DEFAULT_TOUCH_CONFIG { 358, 544, 162, 198 }  // 2.8 inch LCD panel
+//#define DEFAULT_TOUCH_CONFIG { 272, 521, 114, 153 }  // 4.0 inch LCD panel
 
 // Default LCD brightness if display support it
 #define DEFAULT_BRIGHTNESS  70
@@ -790,7 +792,7 @@ extern uint16_t lastsaveid;
 #define frequency1 current_props._frequency1
 #define sweep_points current_props._sweep_points
 #define cal_status current_props._cal_status
-#define cal_data active_props->_cal_data
+#define cal_data current_props._cal_data
 #define electrical_delay current_props._electrical_delay
 
 #define trace current_props._trace
@@ -799,6 +801,9 @@ extern uint16_t lastsaveid;
 #define domain_mode current_props._domain_mode
 #define velocity_factor current_props._velocity_factor
 #define marker_smith_format current_props._marker_smith_format
+
+#define get_trace_scale(t)      current_props._trace[t].scale
+#define get_trace_refpos(t)     current_props._trace[t].refpos
 
 #define previous_marker uistat._previous_marker
 #define current_trace   uistat._current_trace
